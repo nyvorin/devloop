@@ -1,0 +1,18 @@
+{
+  "name": "devloop",
+  "version": "0.1.0",
+  "description": "Build with eyes on — execute implementation plans with live verification via Playwright, XcodeBuildMCP, API tests, or CLI proofs",
+  "skills": [
+    {
+      "name": "devloop",
+      "path": "SKILL.md"
+    },
+    {
+      "name": "writing-devloop-plans",
+      "path": "writing-devloop-plans/SKILL.md"
+    }
+  ],
+  "author": "nyvorin",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/nyvorin/devloop"
+}
