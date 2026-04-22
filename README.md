@@ -171,6 +171,54 @@ Use the included `writing-devloop-plans` skill instead of plain `writing-plans`.
 
 If your plan doesn't have explicit acceptance criteria, devloop's subagent derives them at runtime from the spec + task description. Explicit criteria are more reliable.
 
+## Beads integration (opt-in)
+
+Devloop optionally integrates with [beads](https://github.com/gastownhall/beads) (`bd`) for richer task tracking. When enabled, devloop creates bd issues per plan task, tracks progress via bd, and appends evidence as notes — giving you a queryable history of every task's outcome.
+
+**Without beads:** devloop tracks progress via plan-file checkboxes (`- [ ]` → `- [x]`). This is the default and requires no setup.
+
+**With beads:** devloop uses bd as the primary tracker (plan-file checkboxes still flip as a dual-write).
+
+### Setup
+
+```bash
+# Install beads (if you haven't already)
+# See https://github.com/gastownhall/beads
+
+# Initialize in your project
+cd your-project
+bd init
+```
+
+That's it. Devloop auto-detects `bd` on your PATH + `.beads/` in the project root. No configuration flags needed.
+
+### What devloop does with bd
+
+| Phase | bd command | Purpose |
+|---|---|---|
+| Plan parsing | `bd create` | Creates an issue per plan task with title, description, acceptance criteria, and dependency chain |
+| Before dispatch | `bd update --claim` | Marks the task in-progress |
+| On pass | `bd note` + `bd close` | Appends subagent summary, closes the issue |
+| On stuck/fail | `bd note` | Appends evidence, summary, and next-step hint. Issue stays open. |
+| Final acceptance | `bd note` | Appends "Final acceptance verified" to each task |
+| Resume (re-run) | `bd ready` / `bd list` | Finds uncompleted tasks to resume from |
+
+### Querying progress
+
+```bash
+# See what's left
+bd ready
+
+# See everything including closed
+bd list --all
+
+# Check a specific task
+bd show bd-3
+
+# See the evidence trail
+bd comments bd-3
+```
+
 ## Contributing
 
 1. Fork the repo
