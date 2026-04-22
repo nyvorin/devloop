@@ -1,6 +1,6 @@
 ---
 name: devloop
-description: 'Use when you have a design spec and implementation plan ready and want to execute the build with live verification. Supports 4 verification toolkits per-task: web UI (Playwright), iOS simulator (XcodeBuildMCP), API endpoints (tests + live HTTP), CLI tools (tests + live run). Auto-detects project structure from cwd (docker, xcode, standalone). For greenfield/no-plan use, invoke brainstorming + writing-plans first. Triggers: /devloop, "run the dev loop", "build it and verify", "execute the plan".'
+description: 'Use when you have a design spec and implementation plan ready and want to execute the build with live verification. Supports 4 verification toolkits per-task: web UI (Playwright), iOS simulator (XcodeBuildMCP), API endpoints (tests + live HTTP), CLI tools (tests + live run). Auto-detects project structure (docker, xcode, standalone) and optional beads (bd) issue tracking. Triggers: /devloop, "run the dev loop", "build it and verify", "execute the plan".'
 ---
 
 # Devloop — Build with Eyes On
@@ -89,6 +89,11 @@ digraph devloop {
 - [ ] **1.4 Verify spec exists.** Glob `docs/superpowers/specs/*-design.md`. Zero matches → abort: "No design spec found. Run brainstorming skill first." Multiple matches → use the most recent by filename date prefix.
 - [ ] **1.5 Verify plan exists.** Glob `docs/superpowers/plans/*.md`. Same handling as 1.4. The most recent plan is the active one. If the plan file contains `**Compatible with:** devloop skill` in its header, acceptance criteria are expected inline per task. Otherwise, subagent derives at runtime.
 - [ ] **1.6 If user passed `--from-scratch`:** Abort with: "--from-scratch is a v0.2 feature. Run brainstorming + writing-plans first."
+- [ ] **1.7 Detect task tracking mode.** Check for `bd` (beads) issue tracker:
+  1. Run `which bd`. If not found → `tracking = plan_file`. Skip to Phase 2.
+  2. Check if `.beads/` directory exists in project root. If not → `tracking = plan_file`. Log: "bd installed but no .beads/ found. Run `bd init` to enable beads tracking."
+  3. Both present → `tracking = bd`. Log: "Beads tracking enabled."
+  - Record `tracking` — it gates bd operations in Phase 4 and 5.
 
 ## Phase 2 — Environment standup
 
@@ -139,6 +144,18 @@ digraph devloop {
 
 - [ ] **4.1 Create scratch dir.** `mkdir -p /tmp/devloop-run-$(date -u +%Y-%m-%dT%H-%M-%S)/`. Capture path as `scratch_dir`.
 - [ ] **4.2 Parse the plan.** Read the plan file. Identify task blocks (each `### Task N:` heading with its body). For each task, note whether ALL its `- [ ]` step checkboxes are unchecked (task is unstarted) or partially/fully checked (task is in-progress or done).
+- [ ] **4.2b Create bd issues (if `tracking = bd`).** For each unchecked task found in 4.2:
+  1. Extract the task title (text after `### Task N:`).
+  2. Extract acceptance criteria (the `**Acceptance Criteria**` section, or first 2 lines of the task block if no explicit criteria).
+  3. Create the bd issue:
+     ```bash
+     bd create "<task title>" \
+       --description "<first 2 lines of task block>" \
+       --acceptance "<acceptance criteria text>"
+     ```
+     For tasks after the first, add `--deps "<previous task's bd ID>"` to create a linear dependency chain.
+  4. Capture the returned bd ID (e.g., `bd-1`). Build a map: `task_number → bd_id`.
+  - Skip bd creation for tasks whose checkboxes are already all `[x]` (completed in a prior run).
 - [ ] **4.3 Iterate unchecked tasks in plan order.** For each task with at least one unchecked step:
   - [ ] **4.3.1 Classify verify toolkit.** Check (in priority order):
     1. If task block contains `**Verify via:** <toolkit>`, use that value.
@@ -156,16 +173,17 @@ digraph devloop {
     - `{{binary_path}}` — path to built binary (cli tasks only, empty otherwise)
     - `{{observe_mode}}` — `static`, `interactive`, or `n/a`
     - `{{scratch_dir}}` — scratch directory path
+  - [ ] **4.3.2c Claim bd issue (if `tracking = bd`).** Run `bd update <bd_id> --claim` to set the issue to in_progress and assign to the current actor.
   - [ ] **4.3.3 Dispatch subagent** using the Agent tool with the substituted prompt. Wait for return.
   - [ ] **4.3.4 Parse the JSON return.** The subagent's last message must parse as JSON. If parse fails, treat as `{status: "fail", summary: "subagent did not return valid JSON", evidence: {...raw...}}`.
-  - [ ] **4.3.5 On `status: "pass"`:** mark all unchecked steps in this task block as `[x]` in the plan file. Continue to next task.
-  - [ ] **4.3.6 On `status: "stuck"` or `status: "fail"`:** stop the loop. Surface the subagent's `summary`, `evidence`, `files_changed`, and `next_step_hint` to the user. Ask: "skip this task / retry this task / abort all". Act on response. If "abort all", proceed to no further tasks.
+  - [ ] **4.3.5 On `status: "pass"`:** mark all unchecked steps in this task block as `[x]` in the plan file. If `tracking = bd`: run `bd note <bd_id> "PASS: <subagent summary>"` then `bd close <bd_id>`. Continue to next task.
+  - [ ] **4.3.6 On `status: "stuck"` or `status: "fail"`:** If `tracking = bd`: run `bd note <bd_id> "STUCK: <subagent summary>\nEvidence: <evidence summary>\nFiles changed: <files_changed>\nNext step: <next_step_hint>"`. Do NOT close the issue. Then stop the loop, surface the subagent's summary, evidence, files_changed, and next_step_hint to the user. Ask: "skip this task / retry this task / abort all". Act on response. If "abort all", proceed to no further tasks.
 
 ## Phase 5 — Final acceptance
 
 - [ ] **5.1 Compose per-task verification prompts.** For each completed task, build a verification-only subagent prompt using that task's `verify_toolkit` and acceptance criteria. The subagent's job is RE-VERIFY only (no code changes).
 - [ ] **5.2 Dispatch acceptance subagent.** Send a single subagent that re-runs the verification pass for EACH completed task using the appropriate toolkit (playwright tasks get browser checks, api tasks get live curl, cli tasks get live run). Return JSON with `status: "pass"` only if ALL tasks re-verify clean.
-- [ ] **5.3 If acceptance returns `pass`:** report success summary to user. Note target URL (if applicable) and that the environment is left running. STOP.
+- [ ] **5.3 If acceptance returns `pass`:** If `tracking = bd`: for each task's bd issue, run `bd note <bd_id> "Final acceptance verified."`. Report success summary to user. Note target URL (if applicable) and that the environment is left running. STOP.
 - [ ] **5.4 If acceptance returns non-pass:** dispatch ONE "regression repair" subagent with the failing task's details and `next_step_hint`. If repair returns `pass`, re-run 5.2 once. If still non-pass, escalate to user with full evidence.
 
 ## Error handling — quick reference
@@ -189,7 +207,9 @@ digraph devloop {
 
 ## Resumability
 
-The plan file is the source of truth. Re-running `/devloop` on a partially-completed plan starts at the first task with any unchecked step. There is no separate state file.
+**If `tracking = plan_file`:** The plan file is the source of truth. Re-running `/devloop` starts at the first task with any unchecked `- [ ]` step.
+
+**If `tracking = bd`:** On re-run, query `bd ready` or `bd list` to find open (uncompleted) issues. Match open bd issues to plan task blocks by title. Resume from the first open issue. Fall back to plan-file scanning if bd query returns no results (handles edge case: bd initialized after a partial plan-file-tracked run). Completed tasks (closed in bd) are skipped even if their plan-file checkboxes haven't been flipped (bd is authoritative when present).
 
 ## Post-success behavior
 
